@@ -9,6 +9,7 @@ import java.util.Map;
 
 // 词法分析主类
 public abstract class Lexer {
+    public static final short StrTermStart = 0x10, RuleStart = 0x200;
     public static final char EOF = 0xFFFF;
     public static final short ID = 1,  //标识符
             STR1 = 2,  // 单引号括起来的字符串常量
@@ -16,6 +17,7 @@ public abstract class Lexer {
             INT=4,  // 整形常量
             DEC = 5,  // 浮点型常量
             NewLine=6; // 换行
+    public static final short NullTerm = 7, EndTerm = 8;
     public static final short ConstantId = 0x10;
     private final Reader reader;
 
@@ -53,7 +55,9 @@ public abstract class Lexer {
      * 需要忽略的空白字符，如：" \t\n\r"
      * @return 空白字符
      */
-    public abstract String whitespace() ;
+    public String whitespace() {
+        return " \t\n\r";
+    }
 
     /**
      * 注释格式，开始与结束字符串的数组
@@ -62,7 +66,12 @@ public abstract class Lexer {
      *
      * @return  注释格式
      */
-    public abstract String[][] comment() ;
+    public String[][] comment() {
+        return new String[][]{
+                {"//", "\n"},
+                {"/*", "*/"}
+        };
+    }
 
     public static Map<String, Short> createTokenMap(String[] strings) {
         HashMap<String, Short> map = new HashMap<>();
@@ -98,7 +107,12 @@ public abstract class Lexer {
     public Token nextToken()   {
         for (; ; next()) {
             if( currChar == EOF) return null ;
+            // 过滤空白字符
+            if (whitespaceStr.indexOf(currChar) >= 0) {
+                continue;
+            }
 
+            // 过滤注释内容
             String cment = commentMap.get(String.valueOf(currChar));
             if (cment == null) {
                 cment = commentMap.get(String.valueOf(currChar) + nextChar);
@@ -113,13 +127,11 @@ public abstract class Lexer {
                 }
                 continue;
             }
-            // 过滤空白字符
-            if (whitespaceStr.indexOf(currChar) >= 0) {
-                continue;
-            } else if (currChar == '\n') {
+
+            if (currChar == '\n') {
                 next();
                 return new Token(NewLine, "\n");
-            } else if (Character.isJavaIdentifierStart(currChar)) {
+            } else if (Character.isJavaIdentifierStart(currChar)) {// 匹配标识符
                 StringBuilder stringBuilder = new StringBuilder().append( currChar);
                 while (next() != EOF && Character.isJavaIdentifierPart(currChar)) {
                     stringBuilder.append( currChar);
@@ -129,7 +141,7 @@ public abstract class Lexer {
                     return new Token(tokenIdMap.get(id), id);
                 }
                 return new Token(ID, stringBuilder.toString());
-            } else if (Character.isDigit(currChar)) {
+            } else if (Character.isDigit(currChar)) {  // 匹配数字
                 StringBuilder stringBuilder = new StringBuilder().append(currChar);
                 while (next() != EOF && Character.isDigit(currChar)) {
                     stringBuilder.append( currChar);
@@ -143,7 +155,7 @@ public abstract class Lexer {
                     }
                     return new Token(DEC, stringBuilder.toString());
                 }
-            } else if (currChar == '\'') {
+            } else if (currChar == '\'') { // 匹配单引号字符串
                 StringBuilder stringBuilder = new StringBuilder();
                 int lastCh = currChar;
                 while (next() != EOF) {
@@ -156,7 +168,7 @@ public abstract class Lexer {
                 }
                 String s = stringBuilder.toString();
                 return new Token(STR1, s);
-            } else if (currChar == '"') {
+            } else if (currChar == '"') { // 匹配双引号字符串
                 StringBuilder stringBuilder = new StringBuilder();
                 int lastCh = currChar;
                 while (next() != EOF) {
@@ -168,10 +180,13 @@ public abstract class Lexer {
                     lastCh = currChar;
                 }
                 return new Token(STR2, stringBuilder.toString());
-            } else {
+            } else { // 其他字符的匹配
                 String t = String.valueOf( currChar);
                 while (tokenIdMap.containsKey(t) && next() != EOF) {
                     t += String.valueOf( currChar);
+                }
+                if (currChar == EOF) {
+                   t += ' ';
                 }
                 if (t.length() > 1) {
                     t = t.substring(0, t.length() - 1);
