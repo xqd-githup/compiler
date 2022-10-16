@@ -22,4 +22,8 @@ public class Token {
                 ", text='" + text + '\'' +
                 '}';
     }
+
+    public short getType() {
+        return type;
+    }
 }

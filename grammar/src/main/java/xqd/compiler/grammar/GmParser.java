@@ -7,17 +7,17 @@ import xqd.compiler.core.gm.Rule;
 
 import java.io.StringReader;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class GmParser {
     static String[] defaultSymbol = "ID,STR1,Integer,Decimal,STR2,NewLine,NullTerm,EndTerm".split(",");
     Map<Short, Rule> ruleMap = new HashMap<>();
     GmLexer lexer;
-    List<String> termList = new ArrayList<>(), ruleList = new ArrayList<>();
+    List<String> termList = new ArrayList<>();
     String startRule;
     List<Token> allTokens = new ArrayList<>();
     short termIndex = Lexer.StrTermStart, ruleIndex = Lexer.RuleStart;
     Map<String, Short> symbolMap = new HashMap<>();
-    int ruleSize=0 ;
 
     public GmParser(GmLexer lexer) {
         this.lexer = lexer;
@@ -25,12 +25,12 @@ public class GmParser {
         for (String s : defaultSymbol ) {
             symbolMap.put(s, id++);
         }
+        symbolMap.put("T_\\n", Lexer.NewLine);
     }
 
     public void parse() {
         // 先扫一遍， 加载所有的符号
         loadAllSymbol();
-        ruleSize = ruleIndex;
         // 开始创建Rule以及子Rule
         createRule();
         // 补充NullTerm
@@ -68,6 +68,42 @@ public class GmParser {
         ruleMap = map;
         printRullMap();
 
+        System.out.println("求First");
+        ruleMap.values().forEach(r->this.first(r.id));
+
+
+        System.out.println("求Follow");
+        follow(symbolMap.get(startRule));
+
+        // 生成代码
+        new GenCode(termList, ruleMap).gen("Cal","D:\\MyCode\\Java\\github\\compiler\\cal\\src\\main\\java");
+    }
+    Set<Short> first(short node) {
+        if (node < Lexer.RuleStart) {
+            return Collections.singleton(node);
+        }
+        Rule rule = ruleMap.get(node);
+        if (rule.first.size() > 0) {
+            return rule.first;
+        }
+        rule.first = new HashSet<>();
+        for (Produce produce : rule.produces) {
+            for (Short aShort : produce.nodes) {
+                Set<Short> first = first(aShort);
+                produce.first.addAll(first);
+                if (!first.contains(Lexer.NullTerm)) {
+                    produce.first.remove(Lexer.NullTerm);
+                    break;
+                }
+            }
+            int count = rule.first.size();
+            rule.first.addAll(produce.first);
+            // 理论上，一个rule的所有产生式的first应该没有交集
+            if (count + produce.first.size() != rule.first.size()) {
+                System.out.println("First冲突："+rule.name);
+            }
+        }
+        return rule.first;
     }
     static class TreeNode{
         short value;
@@ -147,15 +183,16 @@ public class GmParser {
                 case GmLexer.RuleSplit :
                     Token lastToken = allTokens.get(allTokens.size() - 2);
                     Rule rule = newRule(lastToken.text);
-//                    Symbol symbol = new Symbol(ruleIndex++, lastToken.text, true);
                     symbolMap.put(rule.name, rule.id);
-                    ruleList.add(rule.name);
                     if (startRule == null) {
                         startRule = rule.name;
                     }
                     break;
                 case Lexer.STR1:
-                    symbolMap.put(token.text, termIndex++);
+                    if (symbolMap.containsKey("T_"+token.text)) {
+                        break;
+                    }
+                    symbolMap.put("T_"+token.text, termIndex++);
                     termList.add(token.text);
                     break;
             }
@@ -186,7 +223,51 @@ public class GmParser {
         }
 
     }
-
+    void follow(short startRule) {
+        int count=0,oldcount=-1;
+        ruleMap.get(startRule).follow.add(Lexer.EndTerm);// 将$$ 放入 startRule的follow集
+        // 下面多次循环计算follow集，一直到follow集不再变化为止
+        while (count != oldcount) {
+            oldcount = count;
+            for (Rule rr : ruleMap.values()) {
+                for (Produce produce : rr.produces) {
+                    for (int i = 1; i < produce.nodes.size(); i++) {
+                        short node = produce.nodes.get(i);
+                        short lastNode = produce.nodes.get(i-1);
+                        // 前一个不是rule，则不处理
+                        if (lastNode < Lexer.RuleStart) {
+                            continue;
+                        }
+                        Rule lastRule = ruleMap.get(lastNode);
+                        Set<Short> first = first(node);
+                        int j = i ;
+                        while (first.contains(Lexer.NullTerm)) {
+                            first = new HashSet<>(first);
+                            first.remove(Lexer.NullTerm);
+                            lastRule.follow.addAll(first);
+                            j ++;
+                            if ( j >= produce.nodes.size() ) break;
+                            first = first(produce.nodes.get(j));
+                        }
+                        lastRule.follow.addAll(first);
+                    }
+                    for (int i = produce.nodes.size() - 1; i >= 0; i--) {
+                        Short aShort = produce.nodes.get(i);
+                        if (aShort < Lexer.RuleStart) {
+                            break;
+                        }
+                        Rule rule = ruleMap.get(aShort);
+                        rule.follow.addAll(rr.follow);
+                        Set<Short> first = first(rule.id);
+                        if (!first.contains(Lexer.NullTerm)) {
+                            break;
+                        }
+                    }
+                }
+            }
+            count = ruleMap.values().stream().map(r->r.follow.size()).reduce(0, Integer::sum);
+        }
+    }
     public static void main(String[] args) {
         GmLexer lexer = new GmLexer(new StringReader("cal:\n" +
                 "    exec| cal exec\n" +
@@ -243,6 +324,8 @@ public class GmParser {
                     produceStack.add(produce);
                     break;
                 case GmLexer.STR1:
+                    produceStack.peek().nodes.add(symbolMap.get("T_"+token.text));
+                    break;
                 case GmLexer.ID:
                     produceStack.peek().nodes.add(symbolMap.get(token.text));
                     break;
@@ -253,27 +336,29 @@ public class GmParser {
     }
 
     void printRullMap() {
-        ruleMap.forEach((k,v)->{
-            StringBuilder builder = new StringBuilder(v.name).append("\t=>\t");
-            for (Produce produce : v.produces) {
-                if (produce.nodes.size() == 0) {
-                    builder.append("NullTerm");
-                }else for(Short n :produce.nodes){
-                    String t ;
-                    if (n < Lexer.RuleStart) {
-                        if (n < Lexer.StrTermStart) {
-                            t = defaultSymbol[n-1];
-                        }else{
-                            t = "'"+termList.get(n - Lexer.StrTermStart)+"'";
-                        }
+        ruleMap.forEach((k,v)->this.printRuleOne(v));
+    }
+
+    void printRuleOne(Rule v) {
+        StringBuilder builder = new StringBuilder(v.name).append("\t=>\t");
+        for (Produce produce : v.produces) {
+            if (produce.nodes.size() == 0) {
+                builder.append("NullTerm");
+            }else for(Short n :produce.nodes){
+                String t ;
+                if (n < Lexer.RuleStart) {
+                    if (n < Lexer.StrTermStart) {
+                        t = defaultSymbol[n-1];
                     }else{
-                        t = ruleMap.get(n).name;
+                        t = "'"+termList.get(n - Lexer.StrTermStart)+"'";
                     }
-                    builder.append(t).append("  ");
+                }else{
+                    t = ruleMap.get(n).name;
                 }
-                builder.append("\n\t\t\t");
+                builder.append(t).append("  ");
             }
-            System.out.println(builder);
-        });
+            builder.append("\n\t\t\t");
+        }
+        System.out.println(builder);
     }
 }
