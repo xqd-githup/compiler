@@ -207,7 +207,6 @@ public class GmParser {
         Rule ruleDigui = newRule("digui@");
         ruleDigui.isDigui = true;
         ruleDigui.produces.get(0).nodes.add(Lexer.NullTerm);
-        List<Produce> produces = new ArrayList<>();
         Iterator<Produce> iterator1 = rule.produces.iterator();
         while (iterator1.hasNext()) {
             Produce produce = iterator1.next();
@@ -287,7 +286,6 @@ public class GmParser {
                 "    ;\n" +
                 " prim:\n" +
                 "    Integer|Decimal|ID"));
-        Token token = null;
         new GmParser(lexer).parse();
     }
 

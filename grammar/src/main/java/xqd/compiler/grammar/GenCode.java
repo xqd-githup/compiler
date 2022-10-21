@@ -41,17 +41,20 @@ public class GenCode {
         this.name = name;
         Path lex = Paths.get(p, name + "Lexer.java");
         Path pas = Paths.get(p, name + "Parser.java");
+        Path vis = Paths.get(p, name + "Visitor.java");
         try(BufferedWriter writerLex = Files.newBufferedWriter(lex);
-            BufferedWriter writerPas = Files.newBufferedWriter(pas)) {
+            BufferedWriter writerPas = Files.newBufferedWriter(pas);
+            BufferedWriter writerVis = Files.newBufferedWriter(vis)) {
             createLexer(writerLex);
             createPaser(writerPas);
+            createVisitor(writerVis);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
     void createLexer(Writer writer) throws IOException {
-        HashMap<String, String> map = new HashMap<>();
+        HashMap<String, Object> map = new HashMap<>();
         map.put("ClsName", name + "Lexer");
         StringBuilder constStr = new StringBuilder("{"), termId = new StringBuilder();
 
@@ -81,8 +84,24 @@ public class GenCode {
 
     }
 
+    void createVisitor(Writer writer) throws IOException{
+        HashMap<String, Object> map = new HashMap<>();
+        map.put("ClsName", name + "Visitor");
+        List<String> ruleList = new ArrayList<>();
+        for (int i = Lexer.RuleStart; i<ruleMap.size()+Lexer.RuleStart; i++) {
+            Rule rule = ruleMap.get((short)i);
+            if (rule.isDigui || rule.isSub) {
+                break;
+            }
+            ruleList.add(rule.name);
+        }
+        map.put("ruleList", ruleList);
+        map.put("ParserName", name + "Parser");
+        parseTpl("/Visitor.tpl",  writer, map);
+    }
+
     void createPaser(Writer writer) throws IOException {
-        HashMap<String, String> map = new HashMap<>();
+        HashMap<String, Object> map = new HashMap<>();
         map.put("ClsName", name + "Parser");
         StringBuilder ruleId = new StringBuilder( ), ruleName = new StringBuilder(), idList = new StringBuilder();
 
@@ -156,27 +175,52 @@ public class GenCode {
         parseTpl("/Parser.tpl", writer, map);
     }
 
-    void parseTpl(String tpl, Writer writer, Map<String,String> valueMap) throws IOException {
+    void parseTpl(String tpl, Writer writer, Map<String,Object> valueMap) throws IOException {
         try (InputStream stream = this.getClass().getResourceAsStream(tpl);
         BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
             String line ;
             while ((line = reader.readLine()) != null) {
-                for (int i = 0; i < line.length(); i++) {
-                    char c = line.charAt(i);
-                    if (c == '$' && i+1 < line.length()  && line.charAt(i+1) == '{' ) {
-                        StringBuilder id = new StringBuilder();
-                        for (i+=2; i < line.length() && line.charAt(i) != '}'; i++) {
-                            id.append(line.charAt(i));
+                if( line.trim().startsWith("<list")){
+                    line = line.trim();
+                    int i2 = line.indexOf('>');
+                    String[] split = line.substring(1, i2).split("\\s+");
+                    List list = (List) valueMap.get(split[3]);
+                    StringBuilder content = new StringBuilder();
+                    while ((line = reader.readLine()) != null) {
+                        if (!line.trim().equals("</list>")) {
+                            content.append(line).append('\n');
+                        }else{
+                            break;
                         }
-                        writer.append(valueMap.getOrDefault(id.toString().trim(), ""));
-                    }else{
-                        writer.append(c);
                     }
+                    line = content.toString();
+                    for (Object o : list) {
+                        valueMap.put(split[1], o);
+                        writer.append(parseLine(line, valueMap));
+                    }
+                }else{
+                    writer.append(parseLine(line, valueMap));
                 }
-                writer.append("\n");
             }
         }
+    }
 
+    String parseLine(String line, Map<String,Object> valueMap) {
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == '$' && i+1 < line.length()  && line.charAt(i+1) == '{' ) {
+                StringBuilder id = new StringBuilder();
+                for (i+=2; i < line.length() && line.charAt(i) != '}'; i++) {
+                    id.append(line.charAt(i));
+                }
+                builder.append(valueMap.getOrDefault(id.toString().trim(), ""));
+            }else{
+                builder.append(c);
+            }
+        }
+        builder.append("\n");
+        return builder.toString();
     }
 
     void genCode() {

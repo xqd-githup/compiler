@@ -7,13 +7,14 @@ import xqd.compiler.core.unit.TermUnit;
 
 import java.nio.ByteBuffer;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class Parser {
     public static final int SubRuleMask = 1 << 6, DiguiRuleMask = 2 << 6;
     Map<Short, Rule> ruleMap = new HashMap<>();
     protected Lexer lexer;
     Token t;
-    Map<Short, String> nodeNameMap = new HashMap<>();
+    public Map<Short, String> nodeNameMap = new HashMap<>();
     List<Token> tokens = new ArrayList<>();
     int tokenIndex = 0;
 
@@ -111,18 +112,21 @@ public class Parser {
         return ruleNode;
     }
 
+    public static boolean isTerm(short id) {
+        return id < Lexer.RuleStart;
+    }
+
     //
-//    void showNodeNames(List<Short> nodes) {
-//        System.out.println(nodes.stream().map(nodeNameMap::get).collect(Collectors.joining(", ")));
-//    }
+    void showNodeNames(List<Short> nodes) {
+        System.out.println(nodes.stream().map(nodeNameMap::get).collect(Collectors.joining(", ")));
+    }
     Stack<Integer> diguiStack = new Stack<>();
 
     void parseProduce(List<Short> nodes) {
 
         for (Short node : nodes) {
-//                        System.out.print(nodeNameMap.get(node) + " ");
             if (t.type == Lexer.EndTerm) {
-                System.out.println("End");
+                System.out.println("没解析完就结束了");
                 return;
             }
             if (node < Lexer.RuleStart) {
@@ -138,22 +142,21 @@ public class Parser {
                             ArrayList<Short> diguiNodes = new ArrayList<>(produce.nodes);
                             diguiNodes.remove(diguiNodes.size() - 1);
 
-                            int dgId = (i << 16) + node;
-                            if (diguiNodes.get(diguiNodes.size() - 1) == parent.peek().id) {
-                                if (!diguiStack.empty() && (diguiStack.peek() >> 16) < i && (short) (diguiStack.peek() & 0xffff) == node) {
-                                    return;
-                                }
+                            // 递归需要与parent比对
+                            RuleUnit peek = parent.peek().parent;
+                            if (peek.id == parent.peek().id  && peek.seqno > 0 && peek.seqno <= i) {
+                                return;
                             }
-                            diguiStack.add(dgId);
+
                             RuleUnit ruleNode = parent.pop();
                             RuleUnit ruleNode1 = new RuleUnit(ruleNode.parent, ruleNode.id);
                             ruleNode.parent.getUnitList().set(ruleNode.parent.getUnitList().size() - 1, ruleNode1);
                             ruleNode.parent = ruleNode1;
                             ruleNode1.getUnitList().add(ruleNode);
+                            ruleNode1.seqno = i;
                             parent.push(ruleNode1);
 
                             parseProduce(diguiNodes);
-                            diguiStack.pop();
                             break;
                         }
                     }
@@ -167,43 +170,79 @@ public class Parser {
     RuleUnit parse(short r) {
         Rule rl = ruleMap.get(r);
         System.out.print(rl.name + "=>");
+        Produce choose = choose(r, tokenIndex-1);
+        if (choose == null) {
+            throw new TokenException("no match");
+        }
         RuleUnit ruleNode = new RuleUnit(parent.peek(), r);
 
         if (!rl.isSub) {
             parent.peek().getUnitList().add(ruleNode);
             parent.add(ruleNode);
         }
+        choose.nodes.stream().map(nodeNameMap::get).forEach(n -> System.out.print(n + " "));
+        System.out.println();
+        parseProduce(choose.nodes);
+        return ok(ruleNode);
+    }
 
-        short nodeid = (short) t.getType();
-        if (!rl.first.contains(nodeid)) {
-            if (rl.first.contains(Lexer.NullTerm) && rl.follow.contains(nodeid)) {
-                return ok(ruleNode);
+    Produce choose(short r, int nowIndex) {
+        int token = nowIndex;
+        Rule rl = ruleMap.get(r);
+        Token token1 = tokens.get(token);
+        if (token1.type == Lexer.EndTerm) {
+            System.out.println("没解析完就结束了");
+            return null;
+        }
+        if (!rl.first.contains(token1.type)) {
+            if (rl.first.contains(Lexer.NullTerm) && rl.follow.contains(token1.type)) {
+                for (Produce produce : rl.produces) {
+                    if (produce.first.contains(Lexer.NullTerm)) {
+                        return produce;
+                    }
+                }
             } else {
-                throw new TokenException("no match");
+                return null;
             }
         }
+
+        ArrayList<Produce> integers = new ArrayList<>();
         for (Produce produce : rl.produces) {
-            if (produce.first.contains(nodeid)) {
-                int now = tokenIndex;
-                try {
-//                    ruleNode.setSeq(produce.seq);
-                    produce.nodes.stream().map(nodeNameMap::get).forEach(n -> System.out.print(n + " "));
-                    System.out.println();
-                    parseProduce(produce.nodes);
-                    return ok(ruleNode);
-                } catch (TokenException e) {
-                    tokenIndex = now - 1;
-                    next();
+            if (produce.first.contains(token1.type)) {
+                integers.add(produce);
+            }
+        }
+        if (integers.size() == 1) {
+            return integers.get(0);
+        } else if (integers.size() == 0) {
+            return null;
+        }
+
+        for (Produce integer : integers) {
+            int now = token;
+            boolean match = true;
+            for (Short node : integer.nodes) {
+                if (isTerm(node)) {
+                    if (node != tokens.get(now++).type) {
+                        match = false;
+                        break;
+                    }
+                }else{
+                    System.out.println(r+" choos "+now+"  "+tokens.get(now));
+                    if( choose(node, now) == null ){
+                        match = false;
+                        break;
+                    }
                 }
             }
+            if( match)
+                return integer;
         }
-        throw new TokenException("no match");
-
+        return null ;
     }
 
     void match(short node) {
         if (node == t.type) {
-//            System.out.println(String.format("match:%s  %s", nodeNameMap.get(node), t.getText()));
             parent.peek().getUnitList().add(new TermUnit(parent.peek(), t));
             next();
         } else {
